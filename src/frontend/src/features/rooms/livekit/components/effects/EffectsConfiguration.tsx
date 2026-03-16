@@ -148,7 +148,7 @@ export const EffectsConfiguration = ({
       if (!match) return ''
       const index = Number(match[1]) - 1
       if (Number.isNaN(index)) return ''
-      return t(`virtual.descriptions.${index}`)
+      return t(`virtual.presets.descriptions.${index}`)
     },
     [t]
   )
