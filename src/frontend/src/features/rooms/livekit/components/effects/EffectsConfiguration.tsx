@@ -233,7 +233,6 @@ export const EffectsConfiguration = ({
           saveProcessorConfig(config)
         } else {
           await processor?.update(config)
-          // We want to trigger onSubmit when options changes so the parent component is aware of it.
           saveProcessorConfig(config)
         }
 
