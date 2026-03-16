@@ -85,6 +85,8 @@ function deriveIdFromProcessorConfig(config: ProcessorConfig) {
   throw new Error(`Unknown config type in config: ${config}`)
 }
 
+// We use a valtio store so that the state is persisted between the join room
+// and the actual room
 const uploadNotPossibleLocalState = proxy({
   imageBackgroundConfig: null as null | {
     type: ProcessorType.VIRTUAL
