@@ -20,11 +20,40 @@ from django.http import HttpResponseRedirect
 
 from lasuite.oidc_login.views import (
     OIDCAuthenticationCallbackView as BaseCallbackView,
+    OIDCAuthenticationRequestView as BaseRequestView,
 )
 
 # Cache key prefix and TTL for exchange codes
 EXCHANGE_CODE_PREFIX = "auth_exchange:"
 EXCHANGE_CODE_TTL = 30  # seconds
+
+
+class OIDCAuthenticationRequestView(BaseRequestView):
+    """Custom authenticate view that preserves native app returnTo in session.
+
+    mozilla-django-oidc's get_next_url() rejects custom URL schemes
+    (e.g. visio://auth-callback) because url_has_allowed_host_and_scheme()
+    only allows http/https. We intercept the returnTo parameter and store
+    it directly in the session for whitelisted schemes, bypassing the
+    safety check (which is not relevant for native app deep links).
+    """
+
+    def get(self, request):
+        redirect_field = getattr(
+            settings, "OIDC_REDIRECT_FIELD_NAME", "returnTo"
+        )
+        return_to = request.GET.get(redirect_field, "")
+        parsed = urlparse(return_to)
+        allowed_schemes = getattr(settings, "NATIVE_APP_REDIRECT_SCHEMES", [])
+
+        # Store native app returnTo before calling super(), which would
+        # reject it via url_has_allowed_host_and_scheme().
+        if parsed.scheme in allowed_schemes:
+            request.session["oidc_login_next"] = return_to
+            request.session.modified = True
+            request.session.save()
+
+        return super().get(request)
 
 
 class OIDCAuthenticationCallbackView(BaseCallbackView):
