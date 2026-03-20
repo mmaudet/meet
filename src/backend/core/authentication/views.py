@@ -28,6 +28,20 @@ EXCHANGE_CODE_PREFIX = "auth_exchange:"
 EXCHANGE_CODE_TTL = 30  # seconds
 
 
+class NativeAppRedirect(HttpResponseRedirect):
+    """HttpResponseRedirect subclass that allows native app custom URL schemes.
+
+    Django's HttpResponseRedirect only allows http, https, and ftp schemes.
+    Native apps use custom schemes (e.g. visio://) for deep links, which
+    Django rejects with DisallowedRedirect. This subclass extends
+    allowed_schemes with the configured native app schemes.
+    """
+
+    allowed_schemes = HttpResponseRedirect.allowed_schemes + list(
+        getattr(settings, "NATIVE_APP_REDIRECT_SCHEMES", [])
+    )
+
+
 class OIDCAuthenticationRequestView(BaseRequestView):
     """Custom authenticate view that preserves native app returnTo in session.
 
@@ -46,14 +60,15 @@ class OIDCAuthenticationRequestView(BaseRequestView):
         parsed = urlparse(return_to)
         allowed_schemes = getattr(settings, "NATIVE_APP_REDIRECT_SCHEMES", [])
 
-        # Store native app returnTo before calling super(), which would
-        # reject it via url_has_allowed_host_and_scheme().
+        response = super().get(request)
+
+        # Override oidc_login_next AFTER super() which set it to None
+        # via get_next_url() rejecting the custom scheme.
         if parsed.scheme in allowed_schemes:
             request.session["oidc_login_next"] = return_to
-            request.session.modified = True
             request.session.save()
 
-        return super().get(request)
+        return response
 
 
 class OIDCAuthenticationCallbackView(BaseCallbackView):
@@ -61,29 +76,28 @@ class OIDCAuthenticationCallbackView(BaseCallbackView):
 
     def login_success(self):
         """After successful login, append exchange code for whitelisted scheme redirects."""
-        response = super().login_success()
-
-        if not isinstance(response, HttpResponseRedirect):
-            return response
-
-        redirect_url = response.url
-        parsed = urlparse(redirect_url)
-
-        # Only intercept redirects to whitelisted custom schemes (native apps).
-        # Standard HTTPS redirects (web browser) work fine with cookies.
+        # Temporarily remove native redirect from session to prevent
+        # super().login_success() from raising DisallowedRedirect when
+        # it tries HttpResponseRedirect with a custom scheme.
+        native_redirect = self.request.session.pop("oidc_login_next", None)
         allowed_schemes = getattr(settings, "NATIVE_APP_REDIRECT_SCHEMES", [])
-        if parsed.scheme not in allowed_schemes:
-            return response
+        parsed = urlparse(native_redirect or "")
 
-        # Generate a short-lived, single-use exchange code
-        exchange_code = uuid.uuid4().hex
-        session_key = self.request.session.session_key
-        cache.set(
-            f"{EXCHANGE_CODE_PREFIX}{exchange_code}",
-            session_key,
-            EXCHANGE_CODE_TTL,
-        )
+        if native_redirect and parsed.scheme in allowed_schemes:
+            # Let super() redirect to the default URL (homepage)
+            response = super().login_success()
 
-        separator = "&" if parsed.query else "?"
-        new_url = f"{redirect_url}{separator}{urlencode({'code': exchange_code})}"
-        return HttpResponseRedirect(new_url)
+            # Generate a short-lived, single-use exchange code
+            exchange_code = uuid.uuid4().hex
+            session_key = self.request.session.session_key
+            cache.set(
+                f"{EXCHANGE_CODE_PREFIX}{exchange_code}",
+                session_key,
+                EXCHANGE_CODE_TTL,
+            )
+
+            separator = "&" if parsed.query else "?"
+            new_url = f"{native_redirect}{separator}{urlencode({'code': exchange_code})}"
+            return NativeAppRedirect(new_url)
+
+        return super().login_success()
